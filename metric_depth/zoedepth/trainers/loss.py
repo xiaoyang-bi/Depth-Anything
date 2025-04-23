@@ -61,7 +61,7 @@ class SILogLoss(nn.Module):
         if mask is not None:
             if mask.ndim == 3:
                 mask = mask.unsqueeze(1)
-
+            # print(input.shape, mask.shape, target.shape)
             input = input[mask]
             target = target[mask]
 

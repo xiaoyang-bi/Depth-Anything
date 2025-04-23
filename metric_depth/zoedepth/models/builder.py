@@ -48,4 +48,5 @@ def build_model(config) -> DepthModel:
     except AttributeError as e:
         raise ValueError(
             f"Model {config.model} has no get_version function.") from e
+    # print(config.version_name)
     return get_version(config.version_name).build_from_config(config)

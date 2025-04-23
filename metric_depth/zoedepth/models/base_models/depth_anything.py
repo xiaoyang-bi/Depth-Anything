@@ -336,6 +336,7 @@ class DepthAnythingCore(nn.Module):
             kwargs = DepthAnythingCore.parse_img_size(kwargs)
         img_size = kwargs.pop("img_size", [384, 384])
         
+        # import pdb; pdb.set_trace()
         depth_anything = DPT_DINOv2(out_channels=[256, 512, 1024, 1024], use_clstoken=False)
         
         state_dict = torch.load('./checkpoints/depth_anything_vitl14.pth', map_location='cpu')

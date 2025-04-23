@@ -47,6 +47,30 @@ COMMON_CONFIG = {
 }
 
 DATASETS_CONFIG = {
+    "sn": {
+        "dataset": "sn",
+        "min_depth": 0.001,
+        # TODO maxdepth stat
+        "max_depth": 256,
+        # "data_path": os.path.join(HOME_DIR, "Kitti/raw_data"),
+        # "gt_path": os.path.join(HOME_DIR, "Kitti/data_depth_annotated_zoedepth"),
+        # "filenames_file": "./train_test_inputs/kitti_eigen_train_files_with_gt.txt",
+        # "input_height": 352,
+        # "input_width": 1216,  # 704
+        # "data_path_eval": os.path.join(HOME_DIR, "Kitti/raw_data"),
+        # "gt_path_eval": os.path.join(HOME_DIR, "Kitti/data_depth_annotated_zoedepth"),
+        # "filenames_file_eval": "./train_test_inputs/kitti_eigen_test_files_with_gt.txt",
+
+        "min_depth_eval": 1e-3,
+        "max_depth_eval": 80,
+
+        # "do_random_rotate": True,
+        # "degree": 1.0,
+        # "do_kb_crop": True,
+        # "garg_crop": True,
+        # "eigen_crop": False,
+        # "use_right": False
+    },
     "kitti": {
         "dataset": "kitti",
         "min_depth": 0.001,
@@ -375,7 +399,7 @@ def get_config(model_name, mode='train', dataset=None, **overwrite_kwargs):
     check_choices("Model", model_name, ["zoedepth", "zoedepth_nk"])
     check_choices("Mode", mode, ["train", "infer", "eval"])
     if mode == "train":
-        check_choices("Dataset", dataset, ["nyu", "kitti", "mix", None])
+        check_choices("Dataset", dataset, ["nyu", "kitti", "mix", "sn", None])
 
     config = flatten({**COMMON_CONFIG, **COMMON_TRAINING_CONFIG})
     config = update_model_config(config, mode, model_name)

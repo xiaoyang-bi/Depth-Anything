@@ -60,6 +60,7 @@ class BaseTrainer:
         self.test_loader = test_loader
         self.optimizer = self.init_optimizer()
         self.scheduler = self.init_scheduler()
+        self.best_rmse = 10000000
 
     def resize_to_target(self, prediction, target):
         if prediction.shape[2:] != target.shape[-2:]:
@@ -140,6 +141,7 @@ class BaseTrainer:
             return True
 
     def train(self):
+        # import pdb; pdb.set_trace()
         print(f"Training {self.config.name}")
         if self.config.uid is None:
             self.config.uid = str(uuid.uuid4()).split('-')[-1]
@@ -148,13 +150,7 @@ class BaseTrainer:
         self.config.experiment_id = f"{self.config.name}{self.config.version_name}_{run_id}"
         self.should_write = ((not self.config.distributed)
                              or self.config.rank == 0)
-        self.should_log = self.should_write  # and logging
-        if self.should_log:
-            tags = self.config.tags.split(
-                ',') if self.config.tags != '' else None
-            wandb.init(project=self.config.project, name=self.config.experiment_id, config=flatten(self.config), dir=self.config.root,
-                       tags=tags, notes=self.config.notes, settings=wandb.Settings(start_method="fork"))
-
+        self.should_log = self.should_write 
         self.model.train()
         self.step = 0
         best_loss = np.inf
@@ -162,7 +158,6 @@ class BaseTrainer:
 
 
         if self.config.prefetch:
-
             for i, batch in tqdm(enumerate(self.train_loader), desc=f"Prefetching...",
                                  total=self.iters_per_epoch) if is_rank_zero(self.config) else enumerate(self.train_loader):
                 pass
@@ -177,16 +172,14 @@ class BaseTrainer:
             self.epoch = epoch
             ################################# Train loop ##########################################################
             if self.should_log:
-                wandb.log({"Epoch": epoch}, step=self.step)
+                print('training epoch: {}'.format(epoch))
             pbar = tqdm(enumerate(self.train_loader), desc=f"Epoch: {epoch + 1}/{self.config.epochs}. Loop: Train",
                         total=self.iters_per_epoch) if is_rank_zero(self.config) else enumerate(self.train_loader)
             for i, batch in pbar:
                 if self.should_early_stop():
                     print("Early stopping")
                     break
-                # print(f"Batch {self.step+1} on rank {self.config.rank}")
                 losses = self.train_on_batch(batch, i)
-                # print(f"trained batch {self.step+1} on rank {self.config.rank}")
 
                 self.raise_if_nan(losses)
                 if is_rank_zero(self.config) and self.config.print_losses:
@@ -195,80 +188,73 @@ class BaseTrainer:
                 self.scheduler.step()
 
                 if self.should_log and self.step % 50 == 0:
-                    wandb.log({f"Train/{name}": loss.item()
-                              for name, loss in losses.items()}, step=self.step)
-
+                    print(f"Step {self.step} - Train Losses: " + ", ".join([f"Train/{name}: {loss.item()}" for name, loss in losses.items()]))
                 self.step += 1
 
                 ########################################################################################################
-
                 if self.test_loader:
                     if (self.step % validate_every) == 0:
                         self.model.eval()
-                        if self.should_write:
-                            self.save_checkpoint(
-                                f"{self.config.experiment_id}_latest.pt")
-
+                        # NOTE bxy: save with the rmse metricm as name
                         ################################# Validation loop ##################################################
                         # validate on the entire validation set in every process but save only from rank 0, I know, inefficient, but avoids divergence of processes
-                        metrics, test_losses = self.validate()
-                        # print("Validated: {}".format(metrics))
+                        # import pdb; pdb.set_trace()
+                        metrics = self.validate()
                         if self.should_log:
-                            wandb.log(
-                                {f"Test/{name}": tloss for name, tloss in test_losses.items()}, step=self.step)
+                            # print(f"Step {self.step} - Test Losses: " + ", ".join([f"Test/{name}: {tloss}" for name, tloss in test_losses.items()]))
+                            print(f"Step {self.step} - Metrics: " + ", ".join([f"Metrics/{k}: {v}" for k, v in metrics.items()]))
 
-                            wandb.log({f"Metrics/{k}": v for k,
-                                      v in metrics.items()}, step=self.step)
-
-                            if (metrics[self.metric_criterion] < best_loss) and self.should_write:
+                            # TODO ddp torch reduce
+                            rmse = metrics['rmse']
+                            if (rmse < self.best_rmse) and self.should_write:
                                 self.save_checkpoint(
-                                    f"{self.config.experiment_id}_best.pt")
-                                best_loss = metrics[self.metric_criterion]
+                                    f"{self.config.experiment_id}_{rmse}.pt")
+                                self.best_rmse = rmse
 
                         self.model.train()
-
                         if self.config.distributed:
                             dist.barrier()
-                        # print(f"Validated: {metrics} on device {self.config.rank}")
-
-                # print(f"Finished step {self.step} on device {self.config.rank}")
                 #################################################################################################
 
         # Save / validate at the end
-        self.step += 1  # log as final point
-        self.model.eval()
-        self.save_checkpoint(f"{self.config.experiment_id}_latest.pt")
+        # self.step += 1  # log as final point
+        # self.model.eval()
+        # self.save_checkpoint(f"{self.config.experiment_id}_latest.pt")
         if self.test_loader:
 
             ################################# Validation loop ##################################################
-            metrics, test_losses = self.validate()
-            # print("Validated: {}".format(metrics))
+            metrics = self.validate()
             if self.should_log:
-                wandb.log({f"Test/{name}": tloss for name,
-                          tloss in test_losses.items()}, step=self.step)
-                wandb.log({f"Metrics/{k}": v for k,
-                          v in metrics.items()}, step=self.step)
+                # print(f"Step {self.step} - Test Losses: " + ", ".join([f"Test/{name}: {tloss}" for name, tloss in test_losses.items()]))
+                print(f"Step {self.step} - Metrics: " + ", ".join([f"Metrics/{k}: {v}" for k, v in metrics.items()]))
 
-                if (metrics[self.metric_criterion] < best_loss) and self.should_write:
-                    self.save_checkpoint(
-                        f"{self.config.experiment_id}_best.pt")
-                    best_loss = metrics[self.metric_criterion]
+            rmse = metrics['rmse']
+            if (rmse < self.best_rmse) and self.should_write:
+                self.save_checkpoint(
+                    f"{self.config.experiment_id}_{rmse}.pt")
+                self.best_rmse = rmse
 
         self.model.train()
 
     def validate(self):
-        with torch.no_grad():
-            losses_avg = RunningAverageDict()
-            metrics_avg = RunningAverageDict()
-            for i, batch in tqdm(enumerate(self.test_loader), desc=f"Epoch: {self.epoch + 1}/{self.config.epochs}. Loop: Validation", total=len(self.test_loader), disable=not is_rank_zero(self.config)):
-                metrics, losses = self.validate_on_batch(batch, val_step=i)
+        # NOTE: bxy overwritten by the subclass
+        raise NotImplementedError
+        # with torch.no_grad():
+        #     losses_avg = RunningAverageDict()
+        #     metrics_avg = RunningAverageDict()
+        #     for i, batch in tqdm(enumerate(self.test_loader), desc=f"Epoch: {self.epoch + 1}/{self.config.epochs}. Loop: Validation", total=len(self.test_loader), disable=not is_rank_zero(self.config)):
+        #         metrics = self.validate_on_batch(batch, val_step=i)
+        #         # TODO 1. aggregate the value if use ddp 2. chk the output image size
+        #         if config.distributed:
+        #             pass
+                
+        #         losses = None
+        #         if losses:
+        #             losses_avg.update(losses)
+        #         if metrics:
+        #             metrics_avg.update(metrics)
 
-                if losses:
-                    losses_avg.update(losses)
-                if metrics:
-                    metrics_avg.update(metrics)
-
-            return metrics_avg.get_value(), losses_avg.get_value()
+        #     return metrics_avg.get_value(), losses_avg.get_value()
 
     def save_checkpoint(self, filename):
         if not self.should_write:
@@ -286,41 +272,41 @@ class BaseTrainer:
                 "epoch": self.epoch
             }, fpath)
 
-    def log_images(self, rgb: Dict[str, list] = {}, depth: Dict[str, list] = {}, scalar_field: Dict[str, list] = {}, prefix="", scalar_cmap="jet", min_depth=None, max_depth=None):
-        if not self.should_log:
-            return
+    # def log_images(self, rgb: Dict[str, list] = {}, depth: Dict[str, list] = {}, scalar_field: Dict[str, list] = {}, prefix="", scalar_cmap="jet", min_depth=None, max_depth=None):
+    #     if not self.should_log:
+    #         return
 
-        if min_depth is None:
-            try:
-                min_depth = self.config.min_depth
-                max_depth = self.config.max_depth
-            except AttributeError:
-                min_depth = None
-                max_depth = None
+    #     if min_depth is None:
+    #         try:
+    #             min_depth = self.config.min_depth
+    #             max_depth = self.config.max_depth
+    #         except AttributeError:
+    #             min_depth = None
+    #             max_depth = None
 
-        depth = {k: colorize(v, vmin=min_depth, vmax=max_depth)
-                 for k, v in depth.items()}
-        scalar_field = {k: colorize(
-            v, vmin=None, vmax=None, cmap=scalar_cmap) for k, v in scalar_field.items()}
-        images = {**rgb, **depth, **scalar_field}
-        wimages = {
-            prefix+"Predictions": [wandb.Image(v, caption=k) for k, v in images.items()]}
-        wandb.log(wimages, step=self.step)
+    #     depth = {k: colorize(v, vmin=min_depth, vmax=max_depth)
+    #              for k, v in depth.items()}
+    #     scalar_field = {k: colorize(
+    #         v, vmin=None, vmax=None, cmap=scalar_cmap) for k, v in scalar_field.items()}
+    #     images = {**rgb, **depth, **scalar_field}
+    #     wimages = {
+    #         prefix+"Predictions": [wandb.Image(v, caption=k) for k, v in images.items()]}
+    #     wandb.log(wimages, step=self.step)
 
-    def log_line_plot(self, data):
-        if not self.should_log:
-            return
+    # def log_line_plot(self, data):
+    #     if not self.should_log:
+    #         return
 
-        plt.plot(data)
-        plt.ylabel("Scale factors")
-        wandb.log({"Scale factors": wandb.Image(plt)}, step=self.step)
-        plt.close()
+    #     plt.plot(data)
+    #     plt.ylabel("Scale factors")
+    #     wandb.log({"Scale factors": wandb.Image(plt)}, step=self.step)
+    #     plt.close()
 
-    def log_bar_plot(self, title, labels, values):
-        if not self.should_log:
-            return
+    # def log_bar_plot(self, title, labels, values):
+    #     if not self.should_log:
+    #         return
 
-        data = [[label, val] for (label, val) in zip(labels, values)]
-        table = wandb.Table(data=data, columns=["label", "value"])
-        wandb.log({title: wandb.plot.bar(table, "label",
-                  "value", title=title)}, step=self.step)
+    #     data = [[label, val] for (label, val) in zip(labels, values)]
+    #     table = wandb.Table(data=data, columns=["label", "value"])
+    #     wandb.log({title: wandb.plot.bar(table, "label",
+    #               "value", title=title)}, step=self.step)

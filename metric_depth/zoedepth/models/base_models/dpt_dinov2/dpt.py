@@ -138,7 +138,7 @@ class DPT_DINOv2(nn.Module):
         torch.manual_seed(1)
         
         self.pretrained = torch.hub.load('../torchhub/facebookresearch_dinov2_main', 'dinov2_{:}14'.format(encoder), source='local', pretrained=False)
-        
+        #self.pretrained = torch.hub.load('torchhub/facebookresearch_dinov2_main', 'dinov2_{:}14'.format(encoder), source='local', pretrained=False)
         dim = self.pretrained.blocks[0].attn.qkv.in_features
         
         self.depth_head = DPTHead(dim, features, use_bn, out_channels=out_channels, use_clstoken=use_clstoken)

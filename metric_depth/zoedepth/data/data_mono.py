@@ -49,8 +49,10 @@ from .ibims import get_ibims_loader
 from .sun_rgbd_loader import get_sunrgbd_loader
 from .vkitti import get_vkitti_loader
 from .vkitti2 import get_vkitti2_loader
-
+# from .sn import get_sn_loader
 from .preprocess import CropParams, get_white_border, get_black_border
+from .sn import SNDataset
+
 
 
 def _is_pil_image(img):
@@ -80,63 +82,25 @@ class DepthDataLoader(object):
         """
 
         self.config = config
+        # if config.dataset == 'sn':
+        #     self.data = get_sn_loader(config, batch_size=1, num_workers=1)
+        #     return
+        
+        # img_size = self.config.get("img_size", None)
+        # img_size = img_size if self.config.get(
+        #     "do_input_resize", False) else None
 
-        if config.dataset == 'ibims':
-            self.data = get_ibims_loader(config, batch_size=1, num_workers=1)
-            return
-
-        if config.dataset == 'sunrgbd':
-            self.data = get_sunrgbd_loader(
-                data_dir_root=config.sunrgbd_root, batch_size=1, num_workers=1)
-            return
-
-        if config.dataset == 'diml_indoor':
-            self.data = get_diml_indoor_loader(
-                data_dir_root=config.diml_indoor_root, batch_size=1, num_workers=1)
-            return
-
-        if config.dataset == 'diml_outdoor':
-            self.data = get_diml_outdoor_loader(
-                data_dir_root=config.diml_outdoor_root, batch_size=1, num_workers=1)
-            return
-
-        if "diode" in config.dataset:
-            self.data = get_diode_loader(
-                config[config.dataset+"_root"], batch_size=1, num_workers=1)
-            return
-
-        if config.dataset == 'hypersim_test':
-            self.data = get_hypersim_loader(
-                config.hypersim_test_root, batch_size=1, num_workers=1)
-            return
-
-        if config.dataset == 'vkitti':
-            self.data = get_vkitti_loader(
-                config.vkitti_root, batch_size=1, num_workers=1)
-            return
-
-        if config.dataset == 'vkitti2':
-            self.data = get_vkitti2_loader(
-                config.vkitti2_root, batch_size=1, num_workers=1)
-            return
-
-        if config.dataset == 'ddad':
-            self.data = get_ddad_loader(config.ddad_root, resize_shape=(
-                352, 1216), batch_size=1, num_workers=1)
-            return
-
-        img_size = self.config.get("img_size", None)
-        img_size = img_size if self.config.get(
-            "do_input_resize", False) else None
-
-        if transform is None:
-            transform = preprocessing_transforms(mode, size=img_size)
+        # if transform is None:
+        #     transform = preprocessing_transforms(mode, size=img_size)
+        from torchvision.transforms import Normalize
 
         if mode == 'train':
 
-            Dataset = DataLoadPreprocess
-            self.training_samples = Dataset(
-                config, mode, transform=transform, device=device)
+            # Dataset = DataLoadPreprocess
+            self.training_samples = SNDataset(depth_transform = Normalize([0.0], [256]))
+            print('train samples: {}'.format(len(self.training_samples)))
+            # Dataset(
+            #     config, mode, transform=transform, device=device)
 
             if config.distributed:
                 self.train_sampler = torch.utils.data.distributed.DistributedSampler(
@@ -154,22 +118,37 @@ class DepthDataLoader(object):
                                    sampler=self.train_sampler)
 
         elif mode == 'online_eval':
-            self.testing_samples = DataLoadPreprocess(
-                config, mode, transform=transform)
+            self.testing_samples = SNDataset(depth_transform = Normalize([0.0], [256]), split='test')
+            print('testing samples: {}'.format(len(self.testing_samples)))
             if config.distributed:  # redundant. here only for readability and to be more explicit
                 # Give whole test set to all processes (and report evaluation only on one) regardless
-                self.eval_sampler = None
+                
+                # NOTE: bxy: different from the init impl of depth any thing above, 
+                # I set the ddp sampler here,
+                # so the validate must use **REDUCE** if use ddp
+                self.eval_sampler = torch.utils.data.distributed.DistributedSampler(
+                    self.testing_samples)
             else:
                 self.eval_sampler = None
-            self.data = DataLoader(self.testing_samples, 1,
-                                   shuffle=kwargs.get("shuffle_test", False),
-                                   num_workers=1,
-                                   pin_memory=False,
+            # self.data = DataLoader(self.testing_samples, 1,
+            #                        shuffle=kwargs.get("shuffle_test", False),
+            #                        num_workers=1,
+            #                        pin_memory=False,
+            #                        sampler=self.eval_sampler)
+            
+            self.data = DataLoader(self.testing_samples,
+                                   batch_size=config.batch_size,
+                                   shuffle=(self.eval_sampler is None),
+                                   num_workers=config.workers,
+                                   pin_memory=True,
+                                   persistent_workers=True,
+                                #    prefetch_factor=2,
                                    sampler=self.eval_sampler)
 
         elif mode == 'test':
-            self.testing_samples = DataLoadPreprocess(
-                config, mode, transform=transform)
+            # NOTE: bxy: NOT support DDP in this mode; other mode support DDP
+            # only use it when eval on one gpu and off-line
+            self.testing_samples = SNDataset(depth_transform = Normalize([0.0], [256]), split='test')
             self.data = DataLoader(self.testing_samples,
                                    1, shuffle=False, num_workers=1)
 

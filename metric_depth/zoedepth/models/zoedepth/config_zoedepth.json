@@ -16,7 +16,7 @@
         "output_distribution": "logbinomial",
         "memory_efficient": true,
         "inverse_midas": false,
-        "img_size": [392, 518]
+        "img_size": [384, 704]
     },
     
     "train": {
@@ -24,7 +24,7 @@
         "use_pretrained_midas": true,
         "trainer": "zoedepth",
         "epochs": 5,
-        "bs": 16,
+        "bs": 4,
         "optim_kwargs": {"lr": 0.000161, "wd": 0.01},
         "sched_kwargs": {"div_factor": 1, "final_div_factor": 10000, "pct_start": 0.7, "three_phase":false, "cycle_momentum": true},
         "same_lr": false,

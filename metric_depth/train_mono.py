@@ -89,7 +89,7 @@ def main_worker(gpu, ngpus_per_node, config):
 
         model = build_model(config)
         # print(model)
-            
+        # import pdb; pdb.set_trace()
         model = load_ckpt(config, model)
         model = parallelize(config, model)
 
@@ -99,6 +99,9 @@ def main_worker(gpu, ngpus_per_node, config):
 
         train_loader = DepthDataLoader(config, "train").data
         test_loader = DepthDataLoader(config, "online_eval").data
+
+        print('len train_loader: {}'.format(len(train_loader)))
+        print('len test_loader: {}'.format(len(test_loader)))
 
         trainer = get_trainer(config)(
             config, model, train_loader, test_loader, device=config.gpu)
@@ -116,7 +119,7 @@ if __name__ == '__main__':
     parser.add_argument("-m", "--model", type=str, default="synunet")
     parser.add_argument("-d", "--dataset", type=str, default='nyu')
     parser.add_argument("--trainer", type=str, default=None)
-
+    # import pdb; pdb.set_trace()
     args, unknown_args = parser.parse_known_args()
     overwrite_kwargs = parse_unknown(unknown_args)
 
@@ -174,3 +177,6 @@ if __name__ == '__main__':
         if ngpus_per_node == 1:
             config.gpu = 0
         main_worker(config.gpu, ngpus_per_node, config)
+    # import pdb; pdb.set_trace()
+    # config.gpu = 0
+    # main_worker(config.gpu, ngpus_per_node, config)
