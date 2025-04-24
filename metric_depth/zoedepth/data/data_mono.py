@@ -70,7 +70,7 @@ def preprocessing_transforms(mode, **kwargs):
 
 
 class DepthDataLoader(object):
-    def __init__(self, config, mode, device='cpu', transform=None, **kwargs):
+    def __init__(self, config, mode, device='cpu', transform=None, output_dir='infer', **kwargs):
         """
         Data loader for depth datasets
 
@@ -82,22 +82,17 @@ class DepthDataLoader(object):
         """
 
         self.config = config
-        # if config.dataset == 'sn':
-        #     self.data = get_sn_loader(config, batch_size=1, num_workers=1)
-        #     return
-        
-        # img_size = self.config.get("img_size", None)
-        # img_size = img_size if self.config.get(
-        #     "do_input_resize", False) else None
-
-        # if transform is None:
-        #     transform = preprocessing_transforms(mode, size=img_size)
         from torchvision.transforms import Normalize
+        self.output_dir = output_dir
 
         if mode == 'train':
 
             # Dataset = DataLoadPreprocess
-            self.training_samples = SNDataset(depth_transform = Normalize([0.0], [256]))
+            from torch.utils.data import ConcatDataset
+            train_1 = SNDataset(depth_transform = Normalize([0.0], [256]), split='train')
+            train_2 = SNDataset(depth_transform = Normalize([0.0], [256]), split='val')
+            train_3 = SNDataset(depth_transform = Normalize([0.0], [256]), split='test_train')
+            self.training_samples = ConcatDataset([train_1, train_2, train_3])
             print('train samples: {}'.format(len(self.training_samples)))
             # Dataset(
             #     config, mode, transform=transform, device=device)
@@ -118,7 +113,7 @@ class DepthDataLoader(object):
                                    sampler=self.train_sampler)
 
         elif mode == 'online_eval':
-            self.testing_samples = SNDataset(depth_transform = Normalize([0.0], [256]), split='test')
+            self.testing_samples = SNDataset(depth_transform = Normalize([0.0], [256]), split='test_test')
             print('testing samples: {}'.format(len(self.testing_samples)))
             if config.distributed:  # redundant. here only for readability and to be more explicit
                 # Give whole test set to all processes (and report evaluation only on one) regardless
@@ -152,6 +147,12 @@ class DepthDataLoader(object):
             self.data = DataLoader(self.testing_samples,
                                    1, shuffle=False, num_workers=1)
 
+        elif 'infer' in mode or mode == 'challenge':
+            # NOTE: bxy: NOT support DDP in this mode; other mode support DDP
+            # only use it when eval on one gpu and off-line
+            self.testing_samples = SNDataset(depth_transform = Normalize([0.0], [256]), split=mode, output_dir=self.output_dir)
+            self.data = DataLoader(self.testing_samples,
+                                   1, shuffle=False, num_workers=1)
         else:
             print(
                 'mode should be one of \'train, test, online_eval\'. Got {}'.format(mode))

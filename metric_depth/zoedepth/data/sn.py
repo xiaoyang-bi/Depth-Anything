@@ -61,7 +61,6 @@ class SNDataset(Dataset):
             data_root: str = "/home/lsk/sn-depth-main/depth-2025",
             camera_dir = 'color',
             depth_gt_dir = 'depth_r',
-            # crop_size=(128, 128),
             do_horizontal_flip=True,
             max_rotation_angle: int = 10,
             rotation_interpolation=InterpolationMode.BILINEAR,
@@ -70,8 +69,7 @@ class SNDataset(Dataset):
             in_memory=True,
             split='train',
             crop_valid=False,
-            # crop_deterministic=False,
-            # scaling=8,
+            output_dir='infer',
             **kwargs
     ):
         # self.crop_size = crop_size
@@ -81,54 +79,20 @@ class SNDataset(Dataset):
         self.image_transform = image_transform
         self.depth_transform = depth_transform
         self.crop_valid = crop_valid
-        # self.crop_deterministic = crop_deterministic
 
         self.camera_dir = camera_dir
         self.depth_gt_dir = depth_gt_dir
         self.split = split
+        self.output_dir = output_dir
+        # import pdb; pdb.set_trace()
+        self.data_dir = Path(data_root) /  split
 
-        self.data_dir = Path(data_root) / ('Train' if split == 'train' else 'Test')
-        # if max_rotation_angle > 0 and crop_deterministic:
-        #     raise ValueError('Max rotation angle has to be zero when cropping deterministically')
-
-        # ---------- color aug setting ---------------------
-        try:
-            self.brightness = (0.8, 1.2)
-            self.contrast = (0.8, 1.2)
-            self.saturation = (0.8, 1.2)
-            self.hue = (-0.1, 0.1)
-            transforms.ColorJitter.get_params(
-                self.brightness, self.contrast, self.saturation, self.hue)
-        except TypeError:
-            self.brightness = 0.2
-            self.contrast = 0.2
-            self.saturation = 0.2
-            self.hue = 0.1
-        self.color_aug = transforms.ColorJitter(self.brightness, self.contrast, self.saturation, self.hue)
-
-
-
-
-
-
-        self.samples = self._collect_samples(self.data_dir)
-        # with Image.open(self.samples[0][0]) as img:
-        #     self.W, self.H = img.size
-        # # crop_size = (self.W, self.H)
-
-        # if self.crop_valid:
-        #     if self.max_rotation_angle > 45:
-        #         raise ValueError('When crop_valid=True, only rotation angles up to 45° are supported for now')
-
-        #     max_angle = np.floor(min(
-        #         2 * np.arctan((np.sqrt(-(crop_size[0] ** 2) + self.H ** 2 + self.W ** 2) - self.W) / (crop_size[0] + self.H)),
-        #         2 * np.arctan((np.sqrt(-(crop_size[1] ** 2) + self.W ** 2 + self.H ** 2) - self.H) / (crop_size[1] + self.W))
-        #     ) * (180. / np.pi))
-
-        #     if self.max_rotation_angle > max_angle:
-        #         print(f'Max rotation angle too large for given image size and crop size, decreased to {max_angle}')
-        #         self.max_rotation_angle = max_angle
-
+        if self.split != 'challenge':
+            self.samples = self._collect_samples(self.data_dir)
+        else:
+             self.samples = self._collect_samples_color(self.data_dir)
+        
+        
 
 
 
@@ -148,43 +112,62 @@ class SNDataset(Dataset):
                             if depth_gt_file.exists() :
                                 samples.append((str(img_file), str(depth_gt_file))) # bxy
         return samples
+    
+    
+    def _collect_samples_color(self, data_dir):
+        """收集所有匹配的color/depth图像对"""
+        samples = []
+        for game_dir in data_dir.glob("game_*"):
+            for video_dir in game_dir.glob("video_*"):
+                color_dir = video_dir / self.camera_dir
+                if color_dir.exists():
+                    image_ext = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
+                    for img_file in color_dir.glob("*.*"):
+                        if img_file.suffix.lower() in image_ext:
+                            samples.append( str(img_file) ) 
+        return samples
 
     def __getitem__(self, index):
 
         im_index = index
-        color_path, depth_path = self.samples[im_index]
+        if self.split != 'challenge':
+            color_path, depth_path = self.samples[im_index]
+        else:
+            color_path = self.samples[im_index]
+            
         image = torch.from_numpy(np.array(Image.open(color_path).convert('RGB')).astype('float32')).permute(2, 0, 1) / 255.
         image =  F.interpolate(image.unsqueeze(1), size=(384, 704), mode='bilinear').squeeze(1)
-        depth_pil = Image.open(depth_path)
-        depth_np = np.array(depth_pil).astype('float32')
-        if depth_np.ndim == 3:
-            depth_np = depth_np[:, :, 0]
 
-        depth_pil = Image.open(depth_path)
-        depth_np = np.array(depth_pil).astype('float32')
-        if depth_np.ndim == 3:
-            depth_np = depth_np[:, :, 0]
-        depth_map = torch.from_numpy(depth_np).unsqueeze(0)
-             
-        outputs = [image, depth_map] # TODO add the mask to 
-        # if self.split == 'train':
-            # if self.do_horizontal_flip:
-            # outputs = random_horizontal_flip(outputs)
-            # outputs = random_rotate(outputs, self.max_rotation_angle, self.rotation_interpolation,
-            #                         crop_valid=False)
-            # outputs[0] = self.color_aug(outputs[0])
-
-
-        if self.image_transform is not None:
-            outputs[0] = self.image_transform(outputs[0])
         
-        if self.depth_transform is not None:
-            outputs[1] = self.depth_transform(outputs[1])
+        if ('infer' not in self.split) and (self.split != 'challenge'):
+            depth_pil = Image.open(depth_path)
+            depth_np = np.array(depth_pil).astype('float32')
+            if depth_np.ndim == 3:
+                depth_np = depth_np[:, :, 0]
+            depth_map = torch.from_numpy(depth_np).unsqueeze(0)
+                
+            outputs = [image, depth_map] 
+            if self.split == 'train':
+                if self.do_horizontal_flip:
+                    outputs = random_horizontal_flip(outputs)
+                # outputs = random_rotate(outputs, self.max_rotation_angle, self.rotation_interpolation,
+                #                         crop_valid=False)
+                # outputs[0] = self.color_aug(outputs[0])
+
+            if self.image_transform is not None:
+                outputs[0] = self.image_transform(outputs[0])
             
-        image, depth_map = outputs
-
-        sample = {'image': image, 'depth': depth_map}  #'focal':xxx, 'mask': xxx}
-        
+            if self.depth_transform is not None:
+                outputs[1] = self.depth_transform(outputs[1])
+                
+            image, depth_map = outputs
+            sample = {'image': image, 'depth': depth_map}  #'focal':xxx, 'mask': xxx}
+        else:
+            # import pdb; pdb.set_trace()
+            output_dir = Path(color_path).parent.parent/ self.output_dir
+            output_dir.mkdir(exist_ok=True)
+            out_path = str(output_dir / color_path.split('/')[-1])
+            sample = {'image': image, 'out_path': out_path}
         return sample
 
     
@@ -276,7 +259,7 @@ def to_pil(img):
 if __name__ == '__main__':
     from torchvision.transforms import Normalize
     # import pdb; pdb.set_trace()
-    dataset = SNDataset(data_root='/home/lsk/Depth-Anything-V2/SoccerNet/depth-basketball/', depth_transform = Normalize([0.0], [256]))
+    dataset = SNDataset( depth_transform = Normalize([0.0], [256]), split='challenge')
     num_len = len(dataset)
     print("num len: {}".format(num_len))
 
@@ -285,37 +268,38 @@ if __name__ == '__main__':
     # import pdb; pdb.set_trace()
     for i in range(min(num_len, 10)):  # 查看前10个样本
         data = dataset[i]
-        depth_map = data['depth']
-        print("depth min: {}, max: {}".format(depth_map.min(), depth_map.max()))
-        guide, gt = data['image'], data['depth']
-        source = guide
-        # guide, gt = data['guide'], data['y'], data['source']
-        print("Original shapes:", guide.shape, gt.shape)
+        print('img shape: {}'.format(data['image'].shape))
+        # depth_map = data['depth']
+        # print("depth min: {}, max: {}".format(depth_map.min(), depth_map.max()))
+        # guide, gt = data['image'], data['depth']
+        # source = guide
+        # # guide, gt = data['guide'], data['y'], data['source']
+        # print("Original shapes:", guide.shape, gt.shape)
         
-        # 将 torch.Tensor 转换为 numpy.ndarray
-        guide_np = guide.numpy() if torch.is_tensor(guide) else guide
-        gt_np = gt.numpy() if torch.is_tensor(gt) else gt
-        source_np = source.numpy() if torch.is_tensor(source) else source
+        # # 将 torch.Tensor 转换为 numpy.ndarray
+        # guide_np = guide.numpy() if torch.is_tensor(guide) else guide
+        # gt_np = gt.numpy() if torch.is_tensor(gt) else gt
+        # source_np = source.numpy() if torch.is_tensor(source) else source
         
-        # 处理 guide (假设是 (0,1) 范围的 float32)
-        if isinstance(guide_np, np.ndarray) and guide_np.dtype in [np.float32, np.float64]:
-            guide_np = (guide_np * 255).astype(np.uint8)
-        elif isinstance(guide_np, np.ndarray) and guide_np.dtype == np.uint8:
-            pass  # 已经是 0-255 范围
-        else:
-            raise ValueError(f"Unexpected guide type: {type(guide_np)}, dtype: {guide_np.dtype}")
+        # # 处理 guide (假设是 (0,1) 范围的 float32)
+        # if isinstance(guide_np, np.ndarray) and guide_np.dtype in [np.float32, np.float64]:
+        #     guide_np = (guide_np * 255).astype(np.uint8)
+        # elif isinstance(guide_np, np.ndarray) and guide_np.dtype == np.uint8:
+        #     pass  # 已经是 0-255 范围
+        # else:
+        #     raise ValueError(f"Unexpected guide type: {type(guide_np)}, dtype: {guide_np.dtype}")
         
-        # 处理 gt 和 source (假设 colorize 返回的是 (0,255) 的 uint8)
-        gt_np = colorize(gt_np, cmap='magma_r')
-        source_np = colorize(source_np, cmap = 'magma_r')
-        print("After colorize shapes:", guide_np.shape, gt_np.shape, source_np.shape)
-        guide_pil = to_pil(guide_np)
-        gt_pil = to_pil(gt_np)
-        source_pil = to_pil(source_np)
+        # # 处理 gt 和 source (假设 colorize 返回的是 (0,255) 的 uint8)
+        # gt_np = colorize(gt_np, cmap='magma_r')
+        # source_np = colorize(source_np, cmap = 'magma_r')
+        # print("After colorize shapes:", guide_np.shape, gt_np.shape, source_np.shape)
+        # guide_pil = to_pil(guide_np)
+        # gt_pil = to_pil(gt_np)
+        # source_pil = to_pil(source_np)
         
-        # 保存图像
-        from pathlib import Path
-        # output_dir = 'visualization_zoedepth'
-        guide_pil.save(f'basketball/sample_{i}_guide.png')
-        gt_pil.save(f'basketball/sample_{i}_gt.png')
-        source_pil.save(f'basketball/sample_{i}_source.png')
+        # # 保存图像
+        # from pathlib import Path
+        # # output_dir = 'visualization_zoedepth'
+        # guide_pil.save(f'basketball/sample_{i}_guide.png')
+        # gt_pil.save(f'basketball/sample_{i}_gt.png')
+        # source_pil.save(f'basketball/sample_{i}_source.png')
